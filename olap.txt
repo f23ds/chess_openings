@@ -1,0 +1,110 @@
+- Query 1: top true win percentage openings across different ELO clusters
+
+WITH res AS (
+  SELECT
+    f.opening_id,
+    f.white_elo,
+    f.black_elo,
+    r.result
+  FROM fact_games f
+  JOIN reconciled_results r ON f.result_id = r.result_id
+  WHERE
+    [[f.white_elo BETWEEN {{elo_min}} AND {{elo_max}}
+      AND f.black_elo BETWEEN {{elo_min}} AND {{elo_max}}
+      AND ABS(f.white_elo - f.black_elo) <= {{max_elo_diff}}]]
+)
+, agg AS (
+  SELECT
+    opening_id,
+    COUNT(*) AS games,
+    100.0 * AVG(
+      CASE 
+        WHEN result = '1-0' THEN 1
+        WHEN result = '1/2-1/2' THEN 0.5
+        ELSE 0
+      END
+    ) AS white_true_win_pct,
+    100.0 * AVG(CASE WHEN result = '1-0' THEN 1 ELSE 0 END) AS white_win_pct,
+    100.0 * AVG(CASE WHEN result = '1/2-1/2' THEN 1 ELSE 0 END) AS draw_pct,
+    100.0 * AVG(CASE WHEN result = '0-1' THEN 1 ELSE 0 END) AS black_win_pct
+  FROM res
+  GROUP BY opening_id
+  HAVING COUNT(*) >= {{min_games}}
+)
+SELECT
+  o.opening_eco,
+  o.opening_name,
+  a.games,
+  ROUND(a.white_true_win_pct, 2) AS white_true_win_pct,
+  ROUND(a.white_win_pct, 2)      AS white_win_pct,
+  ROUND(a.draw_pct, 2)           AS draw_pct,
+  ROUND(a.black_win_pct, 2)      AS black_win_pct
+FROM agg a
+JOIN reconciled_openings o
+  ON a.opening_id = o.opening_id
+ORDER BY a.white_true_win_pct DESC, a.games ASC
+LIMIT 10;
+
+- Query 2: top and bottom draw percentage openings
+
+SELECT
+  o.opening_eco,
+  o.opening_name,
+  COUNT(*) AS total_partidas,
+  100.0 * AVG(CASE WHEN r.result = '1/2-1/2' THEN 1 ELSE 0 END) AS draw_pct
+FROM fact_games f
+JOIN reconciled_openings o ON f.opening_id = o.opening_id
+JOIN reconciled_results r ON f.result_id = r.result_id
+GROUP BY o.opening_eco, o.opening_name
+HAVING COUNT(*) >= 500
+ORDER BY draw_pct DESC, total_partidas DESC
+LIMIT 10;
+
+SELECT
+  o.opening_eco,
+  o.opening_name,
+  COUNT(*) AS total_partidas,
+  100.0 * AVG(CASE WHEN r.result = '1/2-1/2' THEN 1 ELSE 0 END) AS draw_pct
+FROM fact_games f
+JOIN reconciled_openings o ON f.opening_id = o.opening_id
+JOIN reconciled_results r ON f.result_id = r.result_id
+GROUP BY o.opening_eco, o.opening_name
+HAVING COUNT(*) >= 500
+ORDER BY draw_pct ASC, total_partidas DESC
+LIMIT 10;
+
+- Query 3: top players by greater ELO change
+
+SELECT
+  p.player_name,
+  MIN(
+    CASE 
+      WHEN f.white_player_id = p.player_id THEN f.white_elo
+      WHEN f.black_player_id = p.player_id THEN f.black_elo
+    END
+  ) AS elo_start,
+  MAX(
+    CASE 
+      WHEN f.white_player_id = p.player_id THEN f.white_elo
+      WHEN f.black_player_id = p.player_id THEN f.black_elo
+    END
+  ) AS elo_end,
+  (MAX(
+     CASE 
+       WHEN f.white_player_id = p.player_id THEN f.white_elo
+       WHEN f.black_player_id = p.player_id THEN f.black_elo
+     END
+   ) 
+   - MIN(
+     CASE 
+       WHEN f.white_player_id = p.player_id THEN f.white_elo
+       WHEN f.black_player_id = p.player_id THEN f.black_elo
+     END
+   )) AS elo_gain
+FROM fact_games f
+JOIN reconciled_players p 
+  ON p.player_id IN (f.white_player_id, f.black_player_id)
+GROUP BY p.player_name
+HAVING COUNT(*) >= 5
+ORDER BY elo_gain DESC
+LIMIT 10;
